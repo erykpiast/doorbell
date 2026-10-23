@@ -143,6 +143,81 @@ clean**. Two independent hardware root causes turned out to be responsible:
   SD_MODE properly driven, the amp stays shut down until the driver enables
   it post-boot, instead of pulling current the whole time it's powered.
 
+### 9. USB gadget mode disables the Ethernet HAT
+The Waveshare PoE Ethernet HAT connects a USB hub and a Realtek USB Ethernet
+chip (MAC prefix `00:E0:4C`) to the Pi Zero USB test pads through pogo pins.
+The Pi Zero has one USB controller. Raspberry Pi Imager's "USB gadget" option
+puts it in device mode, so the Pi never sees the hub.
+
+Symptoms: the router shows `link-ok` and PoE `powered-on`, but `rx-bytes` on
+the port stays 0 and no DHCP lease appears. The HAT chip has power and a link,
+but the Pi sends nothing through it.
+
+Fix (on the SD card `bootfs` partition):
+- `config.txt`, `[all]` section: `dtoverlay=dwc2,dr_mode=host`, not
+  `dr_mode=peripheral`.
+- `cmdline.txt`: remove `modules-load=dwc2,g_ether`.
+- `user-data`: `enable_usb_gadget: false`, so cloud-init does not set device
+  mode again.
+
+SSH over USB does not work after this change. Use Ethernet:
+`ssh erykpiast@doorbell.local` (mDNS from `avahi-daemon`).
+
+### 10. Diagnose the network from the MikroTik router
+The router (hEX PoE, 55.8 V input) gives 802.3af PoE on `ether2`–`ether5`. The
+Pi is on `ether4`. These commands find most faults without a screen on the Pi:
+
+```
+/interface ethernet poe monitor ether4 once      # powered-on, ~1.7-2.7 W
+/interface ethernet monitor ether4 once          # link-ok, 100Mbps
+/interface ethernet print stats where name=ether4  # rx-bytes must increase
+/interface bridge host print where on-interface=ether4  # the Pi's MAC
+/ip dhcp-server lease print where host-name="doorbell"
+/interface ethernet poe power-cycle ether4 duration=5s  # hard reset the Pi
+```
+
+- `power-cycle` does not turn PoE back on after `poe-out=off`. Use
+  `/interface ethernet poe set ether4 poe-out=auto-on`.
+- An old DHCP lease stays in the list after a crash. Look at `LAST-SEEN`: if it
+  only grows, the Pi has not renewed the lease.
+- On a Pi Zero, the green ACT LED stays on after boot. It turns off briefly
+  only for SD card access. So a steady LED means "running", not "stuck".
+
+### 11. The MX-RM-5V receiver does not work at 3.3 V on PoE
+The first receiver was an `MX-RM-5V` (same as `XY-MK-5V`), a 5 V
+superregenerative module with an LM358 output stage. It worked at 3.3 V while
+the Pi had USB power. On PoE power, through the HAT DC-DC converter, `DATA`
+stayed at a steady 2.15 V. The Pi read it as `hi`, with 0 edges, also with the
+sender off.
+
+A working receiver toggles all the time on noise. So `edges=0` with a stuck
+level is a hardware fault, not a decoder fault.
+
+Fix: replace it with a `SYN480R` superheterodyne receiver. It works from 3.3 V
+to 5.5 V and gives 3.3 V logic at 3.3 V, so no voltage divider is necessary.
+If you must use a 5 V module, power it from 5 V and put a divider on `DATA`
+(4.7 kΩ series, 10 kΩ to GND). Never connect 5 V logic to a GPIO directly.
+
+### 12. The SYN480R kit has a transmitter that looks like the receiver
+The "SYN480R F114" kit contains 2 blue boards of the same size. The first
+board that we soldered in was the `F114` transmitter. Its `DATA` pin is an
+input, so GPIO17 floated: power was 3.25 V and continuity was good, but there
+were 0 edges.
+
+Tell the boards apart before you solder:
+
+| Board | Chip | Crystal |
+| --- | --- | --- |
+| `SYN480R` receiver | 8 legs | `6.7458` |
+| `F114` transmitter | 6 legs | `13.56` |
+
+Remote test for a floating input: `pinctrl set 17 ip pu; pinctrl get 17`. A
+powered receiver holds the level. A pin that goes `hi` with the pull-up has
+nothing that drives it. Set it back with `pinctrl set 17 ip pn`.
+
+`receiver/rx_probe.py` counts edges and prints a histogram of HIGH pulse
+lengths. With the button held, it shows peaks near 350 µs and 1050 µs.
+
 ## Sender wiring (bench, as working)
 
 ```
@@ -167,12 +242,14 @@ clean**. Two independent hardware root causes turned out to be responsible:
 ## Receiver wiring (as working)
 
 ```
-  Raspberry Pi (40-pin)          433 MHz RX module
+  Raspberry Pi (40-pin)          SYN480R RX module (3.3-5.5 V)
   Pin 1  (3V3)  --------------->  VCC
   Pin 6  (GND)  --------------->  GND
   Pin 11 (GPIO17) <------------   DATA
   ANT on RX -> ~17.3 cm wire
 ```
+
+Do not use a 5 V-only module (`MX-RM-5V`, `XY-MK-5V`) at 3.3 V. See lesson #11.
 
 ## DAC wiring (MAX98357A, as working)
 
@@ -214,7 +291,7 @@ additions can check for conflicts at a glance:
 
 | Pi pin (physical) | GPIO   | Connects to           | Function          |
 |--------------------|--------|------------------------|-------------------|
-| Pin 1  (3V3)       | —      | 433 MHz RX module VCC | RF receiver power |
+| Pin 1  (3V3)       | —      | SYN480R RX module VCC | RF receiver power |
 | Pin 6  (GND)       | —      | 433 MHz RX module GND | RF receiver GND   |
 | Pin 11             | GPIO17 | 433 MHz RX module DATA | RF receiver data (input) |
 | Pin 7              | GPIO4  | MAX98357A SD           | DAC shutdown/enable (driven by the `max98357a` overlay) |
@@ -235,7 +312,15 @@ auto-detect don't claim any of them).
 pip3 install rpi-lgpio --break-system-packages   # provides lgpio used by listen.py
 
 python3 listen.py    # shows idle → DING DONG (code=0xA55A5A) → released
+DOORBELL_SOUND=alarm_loud.wav python3 listen.py   # another WAV from receiver/
+
+python3 rx_probe.py 10   # receiver check: edge count + HIGH pulse histogram
 ```
+
+`listen.py` plays `chime.wav` by default (a two-note bell, made by
+`gen_chime.py`). `make_louder.py in.wav out.wav 12` adds gain with a soft
+limiter. A louder sound makes the amp take more current, so check
+`vcgencmd get_throttled` after a test (`0x0` means no undervoltage).
 
 Decoder constants in `listen.py` must match the firmware:
 `SHORT=350, LONG=1050, SYNC_LOW=10500`, tolerance `TOL=0.6`.
@@ -248,7 +333,10 @@ Decoder constants in `listen.py` must match the firmware:
 - [ ] Replace the terminal animation with the web server + push notifications
       (WebSocket/SSE) from the original plan
 - [x] MAX98357A DAC verified working (SD_MODE on GPIO4, `plughw` playback,
-      `receiver/test_dac.sh`) — chime audio integration into `listen.py` still open
+      `receiver/test_dac.sh`)
+- [x] Chime playback in `listen.py` (`chime.wav`, `DOORBELL_SOUND` override)
+- [x] Pi on PoE through the Waveshare HAT, USB in host mode (lesson #9)
+- [x] `SYN480R` receiver at 3.3 V (lessons #11, #12)
 - [ ] systemd unit so the listener starts on boot
 - [ ] Final mains-side integration (certified PSU, enclosure) per
       [`001_initial/plan.md`](001_initial/plan.md)

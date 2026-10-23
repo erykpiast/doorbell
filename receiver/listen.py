@@ -7,7 +7,8 @@ import os
 from collections import deque
 
 GPIO_PIN = 17
-ALARM_WAV = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'alarm.wav')
+ALARM_WAV = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         os.environ.get('DOORBELL_SOUND', 'chime.wav'))
 
 SHORT    = 350    # µs
 LONG     = 1050   # µs
