@@ -318,7 +318,7 @@ python3 rx_probe.py 10   # receiver check: edge count + HIGH pulse histogram
 ```
 
 `listen.py` plays `chime.wav` by default (a two-note bell, made by
-`gen_chime.py`). `make_louder.py in.wav out.wav 12` adds gain with a soft
+`sound_tools/gen_chime.py`). `sound_tools/make_louder.py in.wav out.wav 12` adds gain with a soft
 limiter. A louder sound makes the amp take more current, so check
 `vcgencmd get_throttled` after a test (`0x0` means no undervoltage).
 
