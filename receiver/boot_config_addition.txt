@@ -1,0 +1,8 @@
+# MAX98357A I2S DAC — add these lines to /boot/config.txt on the Pi
+# (on Raspberry Pi OS Bookworm the file is /boot/firmware/config.txt)
+
+# Disable onboard audio (frees up I2S pins)
+dtparam=audio=off
+
+# Enable MAX98357A I2S DAC
+dtoverlay=max98357a
