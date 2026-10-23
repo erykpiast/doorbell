@@ -1,0 +1,14 @@
+[Unit]
+Description=Doorbell chime (plays a sound on doorbell events)
+After=doorbell.service sound.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@DIR@
+ExecStart=/usr/bin/python3 -u @DIR@/chime.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

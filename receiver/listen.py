@@ -1,102 +1,31 @@
+"""Doorbell receiver: decodes the 433 MHz frames and broadcasts press/release
+events on the event bus (see events.py). Clients (chime.py, monitor.py) react
+to the events."""
 import lgpio
 import time
 import threading
-import subprocess
-import re
 import os
 from collections import deque
 
+from events import EventServer
+
 GPIO_PIN = 17
-ALARM_WAV = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         os.environ.get('DOORBELL_SOUND', 'chime.wav'))
 
 SHORT    = 350    # µs
 LONG     = 1050   # µs
 SYNC_LOW = 10500  # µs
 TOL      = 0.6
 
-RELEASED_AFTER = 0.5
-IDLE_AFTER     = 1.5
+RELEASED_AFTER = 0.5  # s without a decoded frame
 
-FRAMES = {
-    'idle': """\033[2J\033[H
-  ╔══════════════════════╗
-  ║       DOORBELL       ║
-  ╚══════════════════════╝
+LOG_FILE = os.path.expanduser('~/doorbell.log')
 
-           .-----.
-          |       |
-          |   ○   |    Waiting...
-          |       |
-           '-----'
-""",
-    'pressed': """\033[2J\033[H
-  ╔══════════════════════╗
-  ║       DOORBELL       ║
-  ╚══════════════════════╝
-
-           .-----.
-          |#######|
-          |   ●   |  *** DING DONG! ***
-          |#######|
-           '-----'
-
-  code: {code}
-""",
-    'released': """\033[2J\033[H
-  ╔══════════════════════╗
-  ║       DOORBELL       ║
-  ╚══════════════════════╝
-
-           .-----.
-          |       |
-          |   ○   |    Released
-          |       |
-           '-----'
-""",
-}
-
-LOG = []
-
-def log(msg):
-    ts = time.strftime('%H:%M:%S')
-    line = f"  {ts}  {msg}"
-    LOG.append(line)
-    if len(LOG) > 10:
-        LOG.pop(0)
-    with open('/home/erykpiast/doorbell.log', 'a') as f:
+def log(msg, echo=True):
+    line = f"{time.strftime('%H:%M:%S')}  {msg}"
+    with open(LOG_FILE, 'a') as f:
         f.write(line + '\n')
-
-def draw(s, code=None):
-    frame = FRAMES[s]
-    if code is not None:
-        frame = frame.format(code=f'0x{code:06X}')
-    log_block = '\n'.join(LOG) if LOG else '  (no events yet)'
-    print(frame + '\n' + log_block + '\n', flush=True)
-
-def find_dac_card():
-    """Find the ALSA card index for the MAX98357A DAC, as in test_dac.sh."""
-    try:
-        out = subprocess.run(['aplay', '-l'], capture_output=True, text=True, check=True).stdout
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return None
-    for line in out.splitlines():
-        m = re.match(r'card (\d+):.*MAX98357A', line)
-        if m:
-            return m.group(1)
-    return None
-
-DAC_CARD = find_dac_card()
-
-def play_alarm():
-    if DAC_CARD is None:
-        log("alarm: no MAX98357A DAC found, skipping playback")
-        return
-    device = f'plughw:{DAC_CARD},0'
-    subprocess.Popen(
-        ['aplay', '-D', device, ALARM_WAV],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+    if echo:
+        print(line, flush=True)
 
 def in_range(val, target):
     return target * (1 - TOL) < val < target * (1 + TOL)
@@ -153,9 +82,11 @@ def poll_thread():
 t = threading.Thread(target=poll_thread, daemon=True)
 t.start()
 
-draw('idle')
+server = EventServer()
+log(f"listening on GPIO{GPIO_PIN}, events on {server.path}")
 
-state = 'idle'
+pressed_code = None     # code of the current press, None when released
+pressed_at = None
 last_signal_time = None
 last_diag = time.monotonic()
 
@@ -170,37 +101,34 @@ try:
             if code is not None:
                 last_signal_time = now
                 pulses.clear()
-                log(f"decoded code=0x{code:06X} ({code})")
-                if state != 'pressed':
-                    log("alarm: playing")
-                    play_alarm()
-                state = 'pressed'
-                draw('pressed', code)
+                log(f"decoded code=0x{code:06X} ({code})", echo=False)
+                if pressed_code is None:
+                    pressed_code = code
+                    pressed_at = now
+                    log(f"press code=0x{code:06X}")
+                    server.publish({'type': 'press', 'code': f'0x{code:06X}',
+                                    'time': time.time()})
+
+        if pressed_code is not None and now - last_signal_time > RELEASED_AFTER:
+            duration = round(last_signal_time - pressed_at, 3)
+            log(f"release code=0x{pressed_code:06X} duration={duration}s")
+            server.publish({'type': 'release', 'code': f'0x{pressed_code:06X}',
+                            'time': time.time(), 'duration': duration})
+            pressed_code = None
 
         # periodic diagnostic so we can see the poller is alive
         if now - last_diag > 1.0:
             last_diag = now
-            if state == 'idle':
-                log(f"edges={edge_count[0]} buf={len(snapshot)}")
+            if pressed_code is None:
+                log(f"edges={edge_count[0]} buf={len(snapshot)}", echo=False)
                 # dump the full raw frame so we can hand-decode it
                 if len(snapshot) >= 50:
-                    with open('/home/erykpiast/frame.log', 'w') as f:
+                    with open(os.path.expanduser('~/frame.log'), 'w') as f:
                         for lv, d in snapshot:
                             f.write(f"{'H' if lv else 'L'} {round(d)}\n")
-                draw('idle')
-
-        if last_signal_time is not None:
-            silence = now - last_signal_time
-            if silence > IDLE_AFTER and state != 'idle':
-                state = 'idle'
-                log("idle")
-                draw('idle')
-            elif silence > RELEASED_AFTER and state == 'pressed':
-                state = 'released'
-                log("released")
-                draw('released')
 except KeyboardInterrupt:
     pass
 finally:
     running[0] = False
+    server.close()
     lgpio.gpiochip_close(h)

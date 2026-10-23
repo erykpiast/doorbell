@@ -1,6 +1,6 @@
 [Unit]
-Description=Doorbell receiver (433 MHz decoder and chime)
-After=network.target sound.target
+Description=Doorbell receiver (433 MHz decoder and event broadcaster)
+After=network.target
 
 [Service]
 Type=simple
