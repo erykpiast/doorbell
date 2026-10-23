@@ -311,14 +311,16 @@ auto-detect don't claim any of them).
 # one-time deps (single-purpose Pi)
 pip3 install rpi-lgpio --break-system-packages   # provides lgpio used by listen.py
 
-python3 listen.py    # shows idle → DING DONG (code=0xA55A5A) → released
-DOORBELL_SOUND=alarm_loud.wav python3 listen.py   # another WAV from receiver/
+python3 listen.py    # decoder; logs press/release, broadcasts events
+python3 chime.py     # in a second terminal: plays the sounds
+python3 monitor.py   # in a third terminal: idle → DING DONG (code=0xA55A5A)
 
 python3 rx_probe.py 10   # receiver check: edge count + HIGH pulse histogram
 ```
 
-`listen.py` plays `chime.wav` by default (a two-note bell, made by
-`gen_chime.py`). `make_louder.py in.wav out.wav 12` adds gain with a soft
+`chime.py` plays `chime.wav` for the first press (a two-note bell, made by
+`sound_tools/gen_chime.py`) and `melody.wav` for the next presses. See
+[`003_event_bus.md`](003_event_bus.md) for the settings. `sound_tools/make_louder.py in.wav out.wav 12` adds gain with a soft
 limiter. A louder sound makes the amp take more current, so check
 `vcgencmd get_throttled` after a test (`0x0` means no undervoltage).
 
@@ -335,9 +337,11 @@ Decoder constants in `listen.py` must match the firmware:
 - [x] MAX98357A DAC verified working (SD_MODE on GPIO4, `plughw` playback,
       `receiver/test_dac.sh`)
 - [x] Chime playback in `listen.py` (`chime.wav`, `DOORBELL_SOUND` override)
+- [x] Receiver split into an event broadcaster and clients
+      ([`003_event_bus.md`](003_event_bus.md))
 - [x] Pi on PoE through the Waveshare HAT, USB in host mode (lesson #9)
 - [x] `SYN480R` receiver at 3.3 V (lessons #11, #12)
-- [ ] systemd unit so the listener starts on boot
+- [x] systemd unit so the listener starts on boot (`receiver/deploy/deploy.sh`)
 - [ ] Final mains-side integration (certified PSU, enclosure) per
       [`001_initial/plan.md`](001_initial/plan.md)
 ```

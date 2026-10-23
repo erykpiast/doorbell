@@ -1,0 +1,14 @@
+[Unit]
+Description=Doorbell receiver (433 MHz decoder and event broadcaster)
+After=network.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@DIR@
+ExecStart=/usr/bin/python3 -u @DIR@/listen.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
