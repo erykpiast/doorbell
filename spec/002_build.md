@@ -337,7 +337,7 @@ Decoder constants in `listen.py` must match the firmware:
 - [x] Chime playback in `listen.py` (`chime.wav`, `DOORBELL_SOUND` override)
 - [x] Pi on PoE through the Waveshare HAT, USB in host mode (lesson #9)
 - [x] `SYN480R` receiver at 3.3 V (lessons #11, #12)
-- [ ] systemd unit so the listener starts on boot
+- [x] systemd unit so the listener starts on boot (`receiver/deploy/deploy.sh`)
 - [ ] Final mains-side integration (certified PSU, enclosure) per
       [`001_initial/plan.md`](001_initial/plan.md)
 ```

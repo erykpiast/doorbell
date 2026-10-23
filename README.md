@@ -28,6 +28,7 @@ The dashed arrow is not built yet.
 | `sender/doorbell_sender.ino` | Arduino firmware for the ATtiny85 |
 | `receiver/listen.py` | Decoder, chime playback, terminal display |
 | `receiver/*.wav` | Chime sounds that `listen.py` plays |
+| `receiver/deploy/` | Scripts that copy the receiver to the Pi and install the service |
 | `receiver/sound_tools/` | Scripts that generate and amplify the sounds |
 | `receiver/rx_probe.py`, `test_dac.sh` | Hardware debug tools for the radio and the DAC |
 | `spec/` | Design documents |
